@@ -1,0 +1,13 @@
+\ Model diet_optimizer_continuous_copy
+\ LP format - for model browsing. Use MPS format to capture full model detail.
+Maximize multi-objectives
+  WeeklyDiversity: Priority=3 Weight=1 AbsTol=1e-06 RelTol=0
+  
+  NutrientBalance: Priority=2 Weight=1 AbsTol=1e-06 RelTol=0
+  
+  LovedFoods: Priority=1 Weight=1 AbsTol=1e-06 RelTol=0
+  
+Subject To
+ min_cal_day_0: >= 1800
+Bounds
+End
