@@ -8,10 +8,12 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from dietopt.core.models import ConstraintSlack, MetricBound, ObjectiveStageValue, OptimizationConfig
+from dietopt.quality import QualityReport
 
 
 class StatusResponse(BaseModel):
     status: str = "ok"
+    warnings: List[str] = Field(default_factory=list)
 
 
 class CreateUserRequest(BaseModel):
@@ -67,6 +69,7 @@ class LogRequest(BaseModel):
 class SummaryResponse(BaseModel):
     consumed: Dict[str, float]
     remaining_bounds: Dict[str, MetricBound]
+    quality_report: Optional[QualityReport] = None
 
 
 class OptimizeRequest(BaseModel):
@@ -112,6 +115,7 @@ class OptimizeResponse(BaseModel):
     today_plan_summary: Optional[str] = None
     meal_slots: List[MealSlotAssignment] = Field(default_factory=list)
     substitutions: List[SubstitutionSuggestion] = Field(default_factory=list)
+    quality_report: Optional[QualityReport] = None
 
 
 class FoodSearchRequest(BaseModel):

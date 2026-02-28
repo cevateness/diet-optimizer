@@ -95,6 +95,44 @@ def _extract_food_grams(foods: List[FoodRecord], solution: np.ndarray) -> Dict[s
     return grams
 
 
+def _diversity_constraint_report(
+    build: LPBuildResult,
+    config: OptimizationConfig,
+    solution: np.ndarray,
+    eps: float = 1e-6,
+) -> List[ConstraintSlack]:
+    rows: List[ConstraintSlack] = []
+    if not config.diversity.enabled or build.total_calorie_var_index is None:
+        return rows
+
+    total_cal = float(solution[build.total_calorie_var_index])
+    alpha = config.diversity.max_single_food_calorie_share
+    for idx, food in enumerate(build.foods):
+        grams = float(solution[idx])
+        cals = food.calories_kcal_g * grams
+        if cals <= eps:
+            continue
+        slack = (alpha * total_cal) - cals
+        status = "binding" if abs(slack) <= eps else ("violated" if slack < 0 else "ok")
+        rows.append(
+            ConstraintSlack(
+                name=f"share_{food.id}_max",
+                status=status,
+                slack=slack,
+            )
+        )
+
+    u_sum = sum(float(solution[idx]) for idx in build.variety_u_indices.values())
+    variety_slack = u_sum - float(config.diversity.min_variety_count)
+    variety_status = (
+        "binding"
+        if abs(variety_slack) <= eps
+        else ("violated" if variety_slack < 0 else "ok")
+    )
+    rows.append(ConstraintSlack(name="variety_min", status=variety_status, slack=variety_slack))
+    return rows
+
+
 def solve_lexicographic(
     foods: List[FoodRecord],
     config: OptimizationConfig,
@@ -150,6 +188,13 @@ def solve_lexicographic(
     constraint_report = build_constraint_report(
         planned_totals=totals_planned,
         bounds=remaining_bounds,
+    )
+    constraint_report.extend(
+        _diversity_constraint_report(
+            build=build,
+            config=config,
+            solution=last_solution,
+        )
     )
 
     return LexicographicSolveResult(

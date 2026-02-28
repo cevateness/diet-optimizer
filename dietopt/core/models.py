@@ -8,6 +8,18 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+DEFAULT_OBJECTIVE_WEIGHTS: Dict[str, float] = {
+    "calories_kcal": 1.0,
+    "protein_g": 1.2,
+    "carbs_g": 0.8,
+    "fat_g": 0.9,
+    "fiber_g": 0.6,
+    "sat_fat_g": 0.6,
+    "sodium_mg": 0.4,
+    "budget_try": 0.5,
+}
+
+
 class MetricBound(BaseModel):
     """Lower/upper bound for a metric."""
 
@@ -60,6 +72,27 @@ class ObjectiveConfig(BaseModel):
         return self
 
 
+class DiversityConfig(BaseModel):
+    """Anti-monotony LP settings (continuous proxy constraints)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    max_single_food_calorie_share: float = 0.65
+    min_variety_count: int = 2
+    variety_min_grams: float = 25.0
+
+    @model_validator(mode="after")
+    def _validate_diversity(self) -> "DiversityConfig":
+        if not (0.0 < self.max_single_food_calorie_share <= 1.0):
+            raise ValueError("max_single_food_calorie_share must be in (0, 1]")
+        if self.min_variety_count < 1:
+            raise ValueError("min_variety_count must be >= 1")
+        if self.variety_min_grams <= 0:
+            raise ValueError("variety_min_grams must be > 0")
+        return self
+
+
 class OptimizationConfig(BaseModel):
     """User-scoped optimization config (constraints + objective sequence)."""
 
@@ -69,6 +102,8 @@ class OptimizationConfig(BaseModel):
     constraints: Dict[str, MetricBound] = Field(default_factory=dict)
     objectives_lex: List[ObjectiveConfig] = Field(default_factory=list)
     food_bounds: FoodBounds = Field(default_factory=FoodBounds)
+    objective_default_weights: Dict[str, float] = Field(default_factory=lambda: DEFAULT_OBJECTIVE_WEIGHTS.copy())
+    diversity: DiversityConfig = Field(default_factory=DiversityConfig)
 
     @model_validator(mode="after")
     def _validate_config(self) -> "OptimizationConfig":
@@ -76,6 +111,11 @@ class OptimizationConfig(BaseModel):
             raise ValueError("horizon_days must be >= 1")
         if not self.objectives_lex:
             raise ValueError("objectives_lex must include at least one objective")
+        for metric, bound in self.constraints.items():
+            min_v = bound.min
+            max_v = bound.max
+            if min_v is not None and max_v is not None and min_v > max_v:
+                raise ValueError(f"invalid range for {metric}: min cannot exceed max")
         return self
 
 
@@ -128,3 +168,25 @@ class ConstraintSlack(BaseModel):
     name: str
     status: Literal["ok", "binding", "violated"]
     slack: float
+
+
+def config_sanity_warnings(config: OptimizationConfig) -> List[str]:
+    """Return non-fatal warnings for suspicious but syntactically valid config."""
+    warnings: List[str] = []
+    calories = config.constraints.get("calories_kcal")
+    if calories is not None:
+        if calories.max is not None and calories.max < 1200 * config.horizon_days:
+            warnings.append(
+                "calories_kcal.max appears very low for the configured horizon; this may cause unrealistic plans."
+            )
+        if calories.min is not None and calories.min < 900 * config.horizon_days:
+            warnings.append(
+                "calories_kcal.min appears unusually low for the configured horizon; verify profile/preset strictness."
+            )
+    if config.diversity.min_variety_count > 10:
+        warnings.append("diversity.min_variety_count is high and may increase infeasibility risk.")
+    if config.diversity.max_single_food_calorie_share < 0.30:
+        warnings.append(
+            "diversity.max_single_food_calorie_share is strict; consider >= 0.40 if infeasibility occurs."
+        )
+    return warnings

@@ -12,10 +12,17 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from sqlmodel import Session
 
-from dietopt.core.models import FoodRecord, OptimizationConfig, UserProfile
+from dietopt.core.models import FoodRecord, OptimizationConfig, UserProfile, config_sanity_warnings
 from dietopt.core.nutrition import compute_consumed_totals, compute_remaining_bounds, metric_value
-from dietopt.presets import derive_targets, targets_to_constraints
+from dietopt.presets import (
+    build_optimization_config,
+    derive_config_from_profile,
+    derive_targets,
+    safe_default_targets,
+    targets_to_constraints,
+)
 from dietopt.providers import OpenFoodFactsProvider, ProviderUnavailableError, search_and_cache_foods
+from dietopt.quality import build_quality_report
 from dietopt.solver import LPInfeasibleError, solve_lexicographic
 from dietopt.store import (
     DEFAULT_FOOD_ALIASES,
@@ -176,6 +183,32 @@ def _search_candidates(
     return list(dedup.values()), cached
 
 
+def _resolve_or_create_config(
+    session: Session,
+    user_id: str,
+) -> tuple[OptimizationConfig, dict[str, float], list[str], str]:
+    config = get_user_config(session, user_id)
+    profile = get_profile(session, user_id)
+
+    if config is not None:
+        if profile is not None:
+            targets = derive_targets(profile)
+        else:
+            targets = safe_default_targets()
+        return config, targets, config_sanity_warnings(config), "existing"
+
+    if profile is not None:
+        targets, _constraints, derived = derive_config_from_profile(profile=profile, strictness="normal")
+        upsert_user_config(session=session, user_id=user_id, config=derived)
+        return derived, targets, config_sanity_warnings(derived), "profile_derived"
+
+    targets = safe_default_targets()
+    constraints = targets_to_constraints(targets, strictness="relaxed")
+    fallback = build_optimization_config(targets=targets, constraints=constraints, horizon_days=1)
+    upsert_user_config(session=session, user_id=user_id, config=fallback)
+    return fallback, targets, config_sanity_warnings(fallback), "safe_default"
+
+
 def _infeasibility_suggestions(
     foods: list[FoodRecord],
     config: OptimizationConfig,
@@ -245,6 +278,44 @@ def _infeasibility_suggestions(
                 )
             )
 
+    if config.diversity.enabled:
+        n_food = len(foods)
+        k = config.diversity.min_variety_count
+        alpha = config.diversity.max_single_food_calorie_share
+        if k > n_food:
+            suggestions.append(
+                RelaxationSuggestion(
+                    constraint="diversity.min_variety_count",
+                    issue="variety_gt_food_universe",
+                    current_min=float(k),
+                    recommended_min=float(n_food),
+                    delta=float(k - n_food),
+                    reason="Required variety exceeds number of available foods.",
+                )
+            )
+        if alpha < (1.0 / max(float(k), 1.0)) - eps:
+            suggestions.append(
+                RelaxationSuggestion(
+                    constraint="diversity.max_single_food_calorie_share",
+                    issue="share_cap_too_strict",
+                    current_max=float(alpha),
+                    recommended_max=round(1.0 / max(float(k), 1.0), 4),
+                    delta=round((1.0 / max(float(k), 1.0)) - float(alpha), 4),
+                    reason="Share cap is mathematically tighter than the minimum implied by variety requirement.",
+                )
+            )
+        if config.diversity.variety_min_grams > max_g:
+            suggestions.append(
+                RelaxationSuggestion(
+                    constraint="diversity.variety_min_grams",
+                    issue="variety_min_gt_food_max",
+                    current_min=float(config.diversity.variety_min_grams),
+                    recommended_min=float(max_g),
+                    delta=float(config.diversity.variety_min_grams - max_g),
+                    reason="Variety minimum grams per food exceeds max_grams_per_food.",
+                )
+            )
+
     if suggestions:
         return suggestions[:8]
 
@@ -302,10 +373,19 @@ def _suggest_substitutions(
     foods: list[FoodRecord],
     food_grams: dict[str, float],
     constraint_report: list[object],
+    consumed_totals: dict[str, float] | None = None,
+    planned_totals: dict[str, float] | None = None,
+    preset_targets: dict[str, float] | None = None,
 ) -> list[SubstitutionSuggestion]:
     foods_by_id = {food.id: food for food in foods}
     suggestions: list[SubstitutionSuggestion] = []
     eps = 1e-6
+    total_day_calories = float((consumed_totals or {}).get("calories_kcal", 0.0)) + float(
+        (planned_totals or {}).get("calories_kcal", 0.0)
+    )
+    preset_calories = float((preset_targets or {}).get("calories_kcal", 0.0))
+    low_vs_preset = preset_calories > 0.0 and total_day_calories < (preset_calories * 0.90)
+    raised_cap_hint = False
 
     for row in constraint_report:
         status = getattr(row, "status", "")
@@ -320,6 +400,22 @@ def _suggest_substitutions(
         if direction == "max" and slack > eps:
             continue
         if direction == "min" and slack > eps:
+            continue
+        if metric == "calories_kcal" and direction == "max" and low_vs_preset and not raised_cap_hint:
+            suggestions.append(
+                SubstitutionSuggestion(
+                    constraint=name,
+                    from_food_id="__policy__",
+                    from_food_name="calorie cap",
+                    to_food_id="__policy__",
+                    to_food_name="higher calorie allowance",
+                    reason=(
+                        "calories_max is binding while total-day calories are below preset target. "
+                        "Increase calories_max or use a looser preset strictness."
+                    ),
+                )
+            )
+            raised_cap_hint = True
             continue
 
         contributors: list[tuple[str, float]] = []
@@ -454,7 +550,7 @@ def create_app(db_url: str | None = None, seed_defaults: bool = True) -> FastAPI
         if get_user(session, req.user_id) is None:
             raise HTTPException(status_code=404, detail="user not found")
         upsert_user_config(session=session, user_id=req.user_id, config=req.config)
-        return StatusResponse()
+        return StatusResponse(warnings=config_sanity_warnings(req.config))
 
     @app.post("/v1/logs", response_model=StatusResponse)
     def post_logs_route(
@@ -613,7 +709,8 @@ def create_app(db_url: str | None = None, seed_defaults: bool = True) -> FastAPI
         if get_user(session, user_id) is None:
             raise HTTPException(status_code=404, detail="user not found")
 
-        config = get_user_config(session, user_id)
+        config, preset_targets, _cfg_warnings, _cfg_source = _resolve_or_create_config(session=session, user_id=user_id)
+        profile = get_profile(session, user_id)
         today = datetime.utcnow().date()
         start, end = _day_window(today, 1)
 
@@ -625,10 +722,17 @@ def create_app(db_url: str | None = None, seed_defaults: bool = True) -> FastAPI
             foods_by_id=foods_by_id,
         )
 
-        remaining = {}
-        if config is not None:
-            remaining = compute_remaining_bounds(config.constraints, consumed)
-        return SummaryResponse(consumed=consumed, remaining_bounds=remaining)
+        remaining = compute_remaining_bounds(config.constraints, consumed)
+        quality_report = build_quality_report(
+            consumed_totals=consumed,
+            planned_totals={},
+            config=config,
+            food_grams={},
+            foods_by_id=foods_by_id,
+            profile=profile,
+            preset_targets=preset_targets,
+        )
+        return SummaryResponse(consumed=consumed, remaining_bounds=remaining, quality_report=quality_report)
 
     @app.post(
         "/v1/plan/optimize",
@@ -642,9 +746,11 @@ def create_app(db_url: str | None = None, seed_defaults: bool = True) -> FastAPI
         if get_user(session, req.user_id) is None:
             raise HTTPException(status_code=404, detail="user not found")
 
-        config = get_user_config(session, req.user_id)
-        if config is None:
-            raise HTTPException(status_code=400, detail="optimization config not found")
+        config, preset_targets, _cfg_warnings, _config_source = _resolve_or_create_config(
+            session=session,
+            user_id=req.user_id,
+        )
+        profile = get_profile(session, req.user_id)
 
         runtime_config: OptimizationConfig = config.model_copy(deep=True)
         if req.horizon_days is not None:
@@ -697,12 +803,24 @@ def create_app(db_url: str | None = None, seed_defaults: bool = True) -> FastAPI
             foods=foods,
             food_grams=solved.food_grams,
             constraint_report=solved.constraint_report,
+            consumed_totals=consumed,
+            planned_totals=solved.totals_planned,
+            preset_targets=preset_targets,
         )
         summary_text = _build_today_plan_summary(
             plan_items=plan_items,
             totals=solved.totals_planned,
             objective_report=solved.objective_report,
             constraint_report=solved.constraint_report,
+        )
+        quality_report = build_quality_report(
+            consumed_totals=consumed,
+            planned_totals=solved.totals_planned,
+            config=runtime_config,
+            food_grams=solved.food_grams,
+            foods_by_id=foods_by_id,
+            profile=profile,
+            preset_targets=preset_targets,
         )
 
         payload = OptimizeResponse(
@@ -719,6 +837,7 @@ def create_app(db_url: str | None = None, seed_defaults: bool = True) -> FastAPI
             today_plan_summary=summary_text,
             meal_slots=meal_slots,
             substitutions=substitutions,
+            quality_report=quality_report,
         )
 
         save_plan(
