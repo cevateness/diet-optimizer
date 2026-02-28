@@ -1,0 +1,10 @@
+id,name,calories_kcal_g,protein_g_g,carbs_g_g,fat_g_g,fiber_g_g,sat_fat_g_g,sodium_mg_g,cost_try_g,preference_score_g,source
+chicken_breast,Chicken Breast,1.65,0.31,0.00,0.036,0.00,0.010,0.74,0.18,0.20,local
+rice_white,Rice White Cooked,1.30,0.024,0.28,0.003,0.004,0.001,0.01,0.04,0.15,local
+lentils,Lentils Cooked,1.16,0.09,0.20,0.004,0.08,0.001,0.02,0.05,0.18,local
+yogurt_greek,Greek Yogurt,0.97,0.10,0.036,0.04,0.00,0.025,0.36,0.07,0.17,local
+olive_oil,Olive Oil,8.84,0.00,0.00,1.00,0.00,0.14,0.00,0.22,0.10,local
+simit,Simit,2.72,0.08,0.53,0.07,0.03,0.012,4.10,0.06,0.16,local
+menemen,Menemen,1.05,0.06,0.05,0.07,0.01,0.020,2.80,0.09,0.19,local
+ayran,Ayran,0.35,0.02,0.03,0.02,0.00,0.012,3.00,0.03,0.15,local
+oats_dry,Oats Dry,3.89,0.17,0.66,0.07,0.10,0.012,0.02,0.05,0.18,local

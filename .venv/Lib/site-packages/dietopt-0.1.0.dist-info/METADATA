@@ -1,0 +1,51 @@
+Metadata-Version: 2.4
+Name: dietopt
+Version: 0.1.0
+Summary: Diet optimizer MVP service with LP planning and trust layer reporting.
+License: GPL-3.0-only
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: fastapi<1.0.0,>=0.115.0
+Requires-Dist: uvicorn<1.0.0,>=0.30.0
+Requires-Dist: sqlmodel<1.0.0,>=0.0.22
+Requires-Dist: scipy<2.0.0,>=1.13.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0.0,>=8.0.0; extra == "dev"
+Requires-Dist: httpx<1.0.0,>=0.27.0; extra == "dev"
+Dynamic: license-file
+
+# diet-optimizer
+
+Diet Optimizer is a B2C MVP web service for:
+- daily food logging,
+- deterministic target derivation from user profile,
+- continuous LP meal planning with SciPy HiGHS,
+- lexicographic multi-objective optimization,
+- trust-layer reporting (objective stages, constraint slacks, provenance).
+
+## Run API
+
+```bash
+uvicorn dietopt.api.main:app --reload
+```
+
+## Test
+
+```bash
+pytest
+```
+
+## Quick Smoke Flows
+- Notebook: `notebooks/01_api_smoke_test.ipynb`
+- Script: `python scripts/demo_flow.py --base-url http://127.0.0.1:8000`
+
+## Main docs
+- `docs/AGENT.md`
+- `docs/ROADMAP.md`
+- `docs/DATA.md`
+- `docs/API.md`
+- `docs/DEV.md`
+- `docs/GUIDE.md`
+- `docs/VALUE_PROPOSITION.md`
+- `docs/ARCHITECTURE.md`

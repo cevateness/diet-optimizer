@@ -1,0 +1,2 @@
+"""Diet optimizer package."""
+

@@ -1,0 +1,6 @@
+id,name,calories_kcal_g,protein_g_g,carbs_g_g,fat_g_g,fiber_g_g,sat_fat_g_g,sodium_mg_g,cost_try_g,preference_score_g,source
+lean_chicken,Lean Chicken,1.65,0.31,0.00,0.036,0.00,0.010,0.74,0.18,0.20,local
+rice,Rice Cooked,1.30,0.024,0.28,0.003,0.004,0.001,0.01,0.04,0.15,local
+beans,Beans Cooked,1.20,0.080,0.210,0.005,0.070,0.001,0.02,0.05,0.18,local
+yogurt,Plain Yogurt,0.97,0.100,0.036,0.040,0.000,0.025,0.36,0.07,0.17,local
+olive_oil,Olive Oil,8.84,0.000,0.000,1.000,0.000,0.140,0.00,0.22,0.10,local
